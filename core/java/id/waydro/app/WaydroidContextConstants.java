@@ -59,4 +59,11 @@ public final class WaydroidContextConstants {
      * @hide
      */
     public static final String WAYDROID_NOTIFICATIONS_SERVICE = "waydroidnotifications";
+
+    /**
+     * Shows media sessions in the desktop's media controls
+     *
+     * @hide
+     */
+    public static final String WAYDROID_MEDIA_PLAYERS_SERVICE = "waydroidmediaplayers";
 }

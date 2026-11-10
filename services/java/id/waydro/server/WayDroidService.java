@@ -30,8 +30,10 @@ import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.pm.ResolveInfo;
+import android.media.session.MediaSession;
 import android.os.IBinder;
 import android.os.RemoteException;
+import android.os.ServiceManager;
 import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.provider.Settings;
@@ -59,6 +61,7 @@ import id.waydro.waydroid.IPlatform;
 import id.waydro.waydroid.Platform;
 import id.waydro.waydroid.IUserMonitor;
 import id.waydro.waydroid.UserMonitor;
+import id.waydro.waydroid.IMediaPlayers;
 import id.waydro.waydroid.INotifications;
 import id.waydro.waydroid.Notifications;
 
@@ -97,6 +100,9 @@ public class WayDroidService extends SystemService {
     // Map (host notification id, host action id) -> PendingIntent
     private Map<Integer, Map<String, PendingIntent>> mNotificationActionsMap = new HashMap<Integer, Map<String, PendingIntent>>();
 
+    private IMediaPlayers mWaydroidMediaPlayers = null;
+    private WayDroidMediaSessions mMediaSessions = null;
+
     public WayDroidService(Context context) {
         super(context);
         mContext = context;
@@ -129,6 +135,18 @@ public class WayDroidService extends SystemService {
         }
         if (mWaydroidHardware != null) {
             registerShutdownHandler();
+        }
+    }
+
+    @Override
+    public void onBootPhase(int phase) {
+        if (phase != PHASE_SYSTEM_SERVICES_READY || mContext == null)
+            return;
+        // The host adds its service after it starts Android, so look it up here rather than in onStart
+        mWaydroidMediaPlayers = IMediaPlayers.Stub.asInterface(
+                ServiceManager.getService(WaydroidContextConstants.WAYDROID_MEDIA_PLAYERS_SERVICE));
+        if (mWaydroidMediaPlayers != null) {
+            registerMediaSessions();
         }
     }
 
@@ -301,6 +319,14 @@ public class WayDroidService extends SystemService {
                     return;
                 }
 
+                // The desktop shows a media notification as a player in its media controls
+                MediaSession.Token token = notification.extras.getParcelable(
+                        Notification.EXTRA_MEDIA_SESSION, MediaSession.Token.class);
+                if (mMediaSessions != null && mMediaSessions.isShown(token)) {
+                    closeHostNotification(key);
+                    return;
+                }
+
                 String appName = _getAppName(packageName);
                 String summary = notification.extras.getString(Notification.EXTRA_TITLE, "");
                 String body = notification.extras.getString(Notification.EXTRA_TEXT, "");
@@ -356,13 +382,7 @@ public class WayDroidService extends SystemService {
 
             @Override
             public void onNotificationRemoved(StatusBarNotification sbn) {
-                String key = sbn.getKey();
-                Integer id = mNotificationIdMap.get(key);
-                mNotificationIdMap.remove(key);
-                if (id != null) {
-                    mNotificationActionsMap.remove(id);
-                    mWaydroidNotifications.closeNotification(id);
-                }
+                closeHostNotification(sbn.getKey());
             }
         };
 
@@ -393,6 +413,33 @@ public class WayDroidService extends SystemService {
                 // TODO: Activate window through hwcomposer
             }
         });
+    }
+
+    private void closeHostNotification(String key) {
+        Integer id = mNotificationIdMap.get(key);
+        mNotificationIdMap.remove(key);
+        if (id != null) {
+            mNotificationActionsMap.remove(id);
+            mWaydroidNotifications.closeNotification(id);
+        }
+    }
+
+    private void registerMediaSessions() {
+        mMediaSessions = new WayDroidMediaSessions(mContext, mWaydroidMediaPlayers,
+                new WayDroidMediaSessions.Listener() {
+            @Override
+            public void onRaise(String packageName) {
+                Intent launchIntent = getAppLaunchIntent(packageName);
+                if (launchIntent != null)
+                    mContext.startActivity(launchIntent);
+            }
+
+            @Override
+            public String getAppName(String packageName) {
+                return _getAppName(packageName);
+            }
+        });
+        mMediaSessions.start();
     }
 
     private void registerShutdownHandler() {
